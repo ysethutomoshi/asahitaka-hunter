@@ -1285,7 +1285,9 @@
 
   const ShareTab = ({ currentUser, users, groupId }) => {
     const [copied, setCopied] = useState(false);
-    const url = `${window.location.origin}${window.location.pathname}?join=${groupId}`;
+    const savedConfig = localStorage.getItem(LS.FB_CONFIG);
+    const cfgParam = savedConfig ? '&cfg=' + btoa(unescape(encodeURIComponent(savedConfig))) : '';
+    const url = `${window.location.origin}${window.location.pathname}?join=${groupId}${cfgParam}`;
 
     const copyUrl = async () => {
       try { await navigator.clipboard.writeText(url); }
@@ -1566,6 +1568,16 @@
       const urlParams=new URLSearchParams(window.location.search);
       const joinGid=urlParams.get('join');
       if (joinGid) localStorage.setItem(LS.PENDING_JOIN, joinGid);
+
+      // 招待リンクにFirebase設定が含まれていれば自動保存
+      const cfgParam=urlParams.get('cfg');
+      if (cfgParam && !localStorage.getItem(LS.FB_CONFIG)) {
+        try {
+          const decoded=decodeURIComponent(escape(atob(cfgParam)));
+          JSON.parse(decoded); // 正しいJSONか確認
+          localStorage.setItem(LS.FB_CONFIG, decoded);
+        } catch(e) { console.warn('cfg parse error', e); }
+      }
 
       const savedConfig=localStorage.getItem(LS.FB_CONFIG);
       if (!savedConfig) { setShowFbSetup(true); setReady(true); return; }
