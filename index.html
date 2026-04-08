@@ -181,6 +181,12 @@
     deleteAllRecords: async (groupId) => {
       await fbRef(`${BASE_PATH}/${groupId}/records`).remove();
     },
+    updateUserNickname: async (groupId, userId, nickname) => {
+      await fbRef(`${BASE_PATH}/${groupId}/users/${userId}/nickname`).set(nickname);
+    },
+    removeUser: async (groupId, userId) => {
+      await fbRef(`${BASE_PATH}/${groupId}/users/${userId}`).remove();
+    },
   };
 
   // ============================================================
@@ -1352,11 +1358,13 @@
   // ============================================================
   // タブ: 設定（Firebase版）
   // ============================================================
-  const SettingsTab = ({ currentUser, apiKey, onApiKeyChange, records, groupId, installPrompt, onInstall, swReady }) => {
+  const SettingsTab = ({ currentUser, apiKey, onApiKeyChange, records, groupId, installPrompt, onInstall, swReady, onNicknameChange, onLeaveGroup }) => {
     const [inputKey,   setInputKey]   = useState(apiKey);
     const [showKey,    setShowKey]    = useState(false);
     const [saved,      setSaved]      = useState(false);
     const [exportDone, setExportDone] = useState('');
+    const [newNickname,  setNewNickname]  = useState(currentUser?.nickname || '');
+    const [nickSaved,    setNickSaved]    = useState(false);
     const [notifPerm,  setNotifPerm]  = useState(
       typeof Notification!=='undefined' ? Notification.permission : 'unsupported'
     );
@@ -1436,9 +1444,35 @@
     return (
       <div className="space-y-4">
         <div className="bg-white p-5 rounded-xl shadow-sm">
-          <p className="font-medium text-gray-700 mb-1">👤 ユーザー情報</p>
-          <p className="text-sm text-gray-600">ニックネーム：<span className="font-medium">{currentUser?.nickname}</span></p>
-          <p className="text-xs text-gray-400 mt-0.5 break-all">ID：{currentUser?.id}</p>
+          <p className="font-medium text-gray-700 mb-3">👤 ニックネーム変更</p>
+          <p className="text-xs text-gray-400 mb-2 break-all">ID：{currentUser?.id}</p>
+          <input
+            type="text" value={newNickname}
+            onChange={e => { setNewNickname(e.target.value); setNickSaved(false); }}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            placeholder="ニックネームを入力" />
+          <button
+            onClick={async () => {
+              const n = newNickname.trim();
+              if (!n) return;
+              await onNicknameChange(n);
+              setNickSaved(true); setTimeout(() => setNickSaved(false), 2000);
+            }}
+            className={`w-full py-2.5 rounded-xl font-medium transition-colors ${nickSaved ? 'bg-green-500 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}>
+            {nickSaved ? '✅ 変更しました' : '💾 ニックネームを変更'}
+          </button>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-1">🚪 グループから退出</p>
+          <p className="text-xs text-gray-400 mb-3">グループから抜けます。記録データは残ります。再参加は招待リンクから可能です。</p>
+          <button
+            onClick={async () => {
+              if (!confirm('グループから退出しますか？')) return;
+              await onLeaveGroup();
+            }}
+            className="w-full py-2.5 rounded-xl font-medium bg-orange-50 text-orange-600 hover:bg-orange-100 border border-orange-200 transition-colors">
+            🚪 グループから退出する
+          </button>
         </div>
         <div className="bg-white p-5 rounded-xl shadow-sm">
           <p className="font-medium text-gray-700 mb-1">🤖 Claude APIキー</p>
@@ -1658,6 +1692,23 @@
       await db.deleteRecord(groupId, id);
     }, [groupId]);
 
+    const onNicknameChange = useCallback(async (nickname) => {
+      if (!groupId || !currentUser) return;
+      await db.updateUserNickname(groupId, currentUser.id, nickname);
+      localStorage.setItem(LS.NICKNAME, nickname);
+      setCurrentUser(u => ({ ...u, nickname }));
+    }, [groupId, currentUser]);
+
+    const onLeaveGroup = useCallback(async () => {
+      if (groupId && currentUser) {
+        try { await db.removeUser(groupId, currentUser.id); } catch {}
+      }
+      localStorage.removeItem(LS.GROUP_ID);
+      localStorage.removeItem(LS.NICKNAME);
+      localStorage.removeItem(LS.PENDING_JOIN);
+      window.location.reload();
+    }, [groupId, currentUser]);
+
     if (!ready) return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
         <div className="text-center text-gray-400">
@@ -1737,6 +1788,8 @@
               onApiKeyChange={(k)=>{setApiKey(k);localStorage.setItem(LS.API_KEY,k);}}
               installPrompt={installPrompt}
               onInstall={()=>{ if(installPrompt){installPrompt.prompt();installPrompt.userChoice.then(()=>setInstallPrompt(null));} }}
+              onNicknameChange={onNicknameChange}
+              onLeaveGroup={onLeaveGroup}
               swReady={swReady}
             />
           )}
