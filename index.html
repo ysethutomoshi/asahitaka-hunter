@@ -1,0 +1,2125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🍶 朝日鷹ハンター〜鷹狩の記録〜</title>
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="朝日鷹ハンター">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <!-- React / Babel / Tailwind -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase SDK (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <!-- Other libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    .leaflet-pane { z-index: 10 !important; }
+    .leaflet-top, .leaflet-bottom { z-index: 15 !important; }
+    .leaflet-popup { z-index: 20 !important; }
+    .tab-scroll::-webkit-scrollbar { display: none; }
+    .tab-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+    @keyframes fadeInUp { from { opacity:0;transform:translateY(16px) } to { opacity:1;transform:translateY(0) } }
+    @keyframes fadeIn   { from { opacity:0 } to { opacity:1 } }
+    @keyframes slideDown{ from { opacity:0;transform:translateY(-8px) } to { opacity:1;transform:translateY(0) } }
+    @keyframes popIn    { 0%{opacity:0;transform:scale(.85)} 70%{transform:scale(1.04)} 100%{opacity:1;transform:scale(1)} }
+    @keyframes spin     { to { transform:rotate(360deg) } }
+    @keyframes pulse-soft { 0%,100%{opacity:1} 50%{opacity:.5} }
+    @keyframes bar-grow { from { width:0 } }
+    @keyframes stamp { 0%{opacity:0;transform:scale(2.2) rotate(-15deg)} 40%{opacity:1;transform:scale(.88) rotate(3deg)} 65%{transform:scale(1.06) rotate(-1deg)} 100%{opacity:1;transform:scale(1) rotate(0deg)} }
+    @keyframes inkSpread { 0%{box-shadow:0 0 0 0 rgba(79,70,229,.5)} 100%{box-shadow:0 0 0 10px rgba(79,70,229,0)} }
+    .stamp-appear { animation:stamp .45s cubic-bezier(.34,1.2,.64,1) both }
+    .stamp-ink    { animation:inkSpread .5s ease-out both }
+    .anim-fade-in-up { animation:fadeInUp .35s ease both }
+    .anim-fade-in    { animation:fadeIn .25s ease both }
+    .anim-slide-down { animation:slideDown .25s ease both }
+    .anim-pop-in     { animation:popIn .4s cubic-bezier(.34,1.56,.64,1) both }
+    .anim-spin       { animation:spin .8s linear infinite }
+    .anim-pulse      { animation:pulse-soft 1.4s ease-in-out infinite }
+    .anim-bar        { animation:bar-grow .6s ease both }
+    .card-hover { transition:transform .18s ease,box-shadow .18s ease }
+    .card-hover:hover { transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.10) }
+    .tab-content { animation:fadeInUp .28s ease both }
+    button:active { transform:scale(.97) }
+  </style>
+</head>
+<body class="bg-gray-100">
+<div id="root"></div>
+<script type="text/babel">
+  const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+  // ============================================================
+  // ローカルストレージキー（Firebase設定・APIキーのみ）
+  // ============================================================
+  const LS = {
+    FB_CONFIG:   'asahitaka_fb_config',
+    GROUP_ID:    'asahitaka_fb_group_id',
+    NICKNAME:    'asahitaka_fb_nickname',
+    API_KEY:     'asahitaka_api_key',
+    NOTIF_CHK:   'asahitaka_last_notif_check',
+    PENDING_JOIN:'asahitaka_fb_pending_join',
+  };
+
+  // ============================================================
+  // ユーティリティ
+  // ============================================================
+  const generateId = (p='id') => `${p}_${Date.now()}_${Math.random().toString(36).substr(2,9)}`;
+  const today = () => new Date().toISOString().split('T')[0];
+  const formatDate = (s) => {
+    if (!s) return '';
+    const [y,m,d] = s.split('-');
+    return `${y}年${parseInt(m)}月${parseInt(d)}日`;
+  };
+  const daysSince = (s) => Math.floor((Date.now()-new Date(s))/86400000);
+
+  const compressImage = (dataUrl, maxWidth=600) => new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const r = Math.min(maxWidth/img.width, 1);
+      const c = document.createElement('canvas');
+      c.width=Math.floor(img.width*r); c.height=Math.floor(img.height*r);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      resolve(c.toDataURL('image/jpeg', 0.75));
+    };
+    img.src = dataUrl;
+  });
+
+  const callClaudeAPI = async (apiKey, messages, maxTokens=1000) => {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':apiKey,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true',
+      },
+      body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:maxTokens, messages }),
+    });
+    if (!res.ok) throw new Error(`API Error: ${res.status}`);
+    const d = await res.json();
+    return d.content.find(c=>c.type==='text')?.text||'';
+  };
+
+  const extractJSON = (text) => {
+    const m = text.match(/\{[\s\S]*\}/);
+    return m ? JSON.parse(m[0]) : null;
+  };
+
+  const EXTRACT_PROMPT = `この情報から朝日鷹の購入・目撃情報を抽出してください。
+以下のJSON形式のみで返してください：
+{"date":"YYYY-MM-DD","store":"店舗名","location":"都道府県市区町村","product":"低温貯蔵酒|生貯蔵酒|生酒","volume":"1800ml|720ml","price":数値またはnull,"memo":"その他情報またはnull"}
+情報が読み取れない項目はnullにしてください。JSONのみを返してください。`;
+
+  // ============================================================
+  // Firebase ヘルパー
+  // ============================================================
+  const fbRef = (path) => firebase.database().ref(path);
+  const BASE_PATH = 'asahitaka-hunter/groups';
+
+  const db = {
+    addRecord: async (groupId, record) => {
+      const id = record.id || generateId('rec');
+      await fbRef(`${BASE_PATH}/${groupId}/records/${id}`).set({
+        ...record, id, createdAt: new Date().toISOString(),
+      });
+      return id;
+    },
+    updateRecord: async (groupId, id, updates) => {
+      await fbRef(`${BASE_PATH}/${groupId}/records/${id}`).update({
+        ...updates, updatedAt: new Date().toISOString(),
+      });
+    },
+    deleteRecord: async (groupId, id) => {
+      await fbRef(`${BASE_PATH}/${groupId}/records/${id}`).remove();
+    },
+    createGroup: async (groupId, userId, nickname) => {
+      const now = new Date().toISOString();
+      await fbRef(`${BASE_PATH}/${groupId}`).set({
+        info: { name:'朝日鷹グループ', createdAt:now, createdBy:userId },
+        users: { [userId]: { nickname, role:'admin', joinedAt:now } },
+        records: {},
+      });
+    },
+    addUser: async (groupId, userId, nickname) => {
+      await fbRef(`${BASE_PATH}/${groupId}/users/${userId}`).set({
+        nickname, role:'member', joinedAt: new Date().toISOString(),
+      });
+    },
+    getGroupInfo: async (groupId) => {
+      const snap = await fbRef(`${BASE_PATH}/${groupId}/info`).once('value');
+      return snap.val();
+    },
+    watchRecords: (groupId, callback) => {
+      const ref = fbRef(`${BASE_PATH}/${groupId}/records`);
+      const handler = (snap) => {
+        const data = snap.val();
+        const list = data
+          ? Object.entries(data).map(([id, r]) => ({ ...r, id }))
+          : [];
+        callback(list.sort((a,b) => (b.date||'').localeCompare(a.date||'')));
+      };
+      ref.on('value', handler);
+      return () => ref.off('value', handler);
+    },
+    watchUsers: (groupId, callback) => {
+      const ref = fbRef(`${BASE_PATH}/${groupId}/users`);
+      const handler = (snap) => {
+        const data = snap.val();
+        callback(data ? Object.entries(data).map(([id,u]) => ({...u, id})) : []);
+      };
+      ref.on('value', handler);
+      return () => ref.off('value', handler);
+    },
+    deleteAllRecords: async (groupId) => {
+      await fbRef(`${BASE_PATH}/${groupId}/records`).remove();
+    },
+    saveSession: async (uid, groupId, nickname) => {
+      await fbRef(`sessions/${uid}`).set({ groupId, nickname, updatedAt: new Date().toISOString() });
+    },
+    getSession: async (uid) => {
+      const snap = await fbRef(`sessions/${uid}`).once('value');
+      return snap.val();
+    },
+    removeSession: async (uid) => {
+      await fbRef(`sessions/${uid}`).remove();
+    },
+    updateUserNickname: async (groupId, userId, nickname) => {
+      await fbRef(`${BASE_PATH}/${groupId}/users/${userId}/nickname`).set(nickname);
+    },
+    removeUser: async (groupId, userId) => {
+      await fbRef(`${BASE_PATH}/${groupId}/users/${userId}`).remove();
+    },
+  };
+
+  // ============================================================
+  // Firebase リアルタイム同期フック
+  // ============================================================
+  const useFirebaseSync = (groupId) => {
+    const [records, setRecords] = useState([]);
+    const [users,   setUsers]   = useState([]);
+    const [syncing, setSyncing] = useState(false);
+
+    useEffect(() => {
+      if (!groupId) return;
+      setSyncing(true);
+      const unsubRec = db.watchRecords(groupId, (recs) => {
+        setRecords(recs); setSyncing(false);
+      });
+      const unsubUsr = db.watchUsers(groupId, setUsers);
+      return () => { unsubRec(); unsubUsr(); };
+    }, [groupId]);
+
+    return { records, users, syncing };
+  };
+
+  // ============================================================
+  // 共通フォームフィールド
+  // ============================================================
+  const inputCls = "w-full border border-gray-300 rounded-lg px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-indigo-500";
+  const labelCls = "block text-sm font-medium text-gray-700 mb-1";
+
+  const RecordFormFields = ({ form, onChange }) => {
+    const [storeSearching,    setStoreSearching]    = useState(false);
+    const [locationSearching, setLocationSearching] = useState(false);
+    const [storeMsg,          setStoreMsg]          = useState('');
+    const [locationMsg,       setLocationMsg]       = useState('');
+
+    const nominatim = async (query) => {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&addressdetails=1`,
+        { headers: { 'Accept-Language': 'ja,en' } }
+      );
+      const data = await res.json();
+      return data[0] || null;
+    };
+
+    // 店舗名 → 場所を補完
+    const searchByStore = async () => {
+      const store = form.store.trim();
+      if (!store) return;
+      setStoreSearching(true); setStoreMsg('');
+      try {
+        const result = await nominatim(`${store} 日本`);
+        if (result) {
+          const addr = result.address;
+          const parts = [addr.prefecture||addr.state, addr.city||addr.town||addr.village, addr.suburb||addr.neighbourhood].filter(Boolean);
+          const location = parts.join('') || result.display_name.split(',').slice(0,2).join('').trim();
+          onChange('location', location);
+          setStoreMsg('✅ 場所を補完しました');
+        } else {
+          setStoreMsg('❌ 見つかりませんでした');
+        }
+      } catch { setStoreMsg('❌ 検索エラー'); }
+      setStoreSearching(false);
+      setTimeout(() => setStoreMsg(''), 3000);
+    };
+
+    // 場所 → 店舗名を補完
+    const searchByLocation = async () => {
+      const location = form.location.trim();
+      if (!location) return;
+      setLocationSearching(true); setLocationMsg('');
+      try {
+        const result = await nominatim(`${location} ${form.store || '酒屋'} 日本`);
+        if (result) {
+          const name = result.name || result.display_name.split(',')[0].trim();
+          if (name && !form.store.trim()) {
+            onChange('store', name);
+            setLocationMsg('✅ 店舗名を補完しました');
+          } else {
+            const addr = result.address;
+            const parts = [addr.prefecture||addr.state, addr.city||addr.town||addr.village].filter(Boolean);
+            const loc = parts.join('') || result.display_name.split(',').slice(0,2).join('').trim();
+            onChange('location', loc);
+            setLocationMsg('✅ 場所を補正しました');
+          }
+        } else {
+          setLocationMsg('❌ 見つかりませんでした');
+        }
+      } catch { setLocationMsg('❌ 検索エラー'); }
+      setLocationSearching(false);
+      setTimeout(() => setLocationMsg(''), 3000);
+    };
+
+    return (
+      <div className="space-y-3">
+        <div><label className={labelCls}>📅 購入日</label>
+          <input type="date" value={form.date} onChange={e=>onChange('date',e.target.value)} className={inputCls} /></div>
+        <div>
+          <label className={labelCls}>🏪 店舗名 <span className="text-red-500">*</span></label>
+          <div className="flex gap-2">
+            <input type="text" value={form.store} onChange={e=>onChange('store',e.target.value)}
+              placeholder="例：ヨークベニマル村山店" className={`${inputCls} flex-1`} />
+            <button type="button" onClick={searchByStore} disabled={storeSearching||!form.store.trim()}
+              title="店舗名から場所を検索"
+              className="px-3 py-2 bg-blue-50 text-blue-600 rounded-lg text-sm hover:bg-blue-100 disabled:opacity-40 transition-colors whitespace-nowrap">
+              {storeSearching ? '⏳' : '📍→'}
+            </button>
+          </div>
+          {storeMsg && <p className="text-xs mt-1 text-gray-500">{storeMsg}</p>}
+        </div>
+        <div>
+          <label className={labelCls}>📍 場所</label>
+          <div className="flex gap-2">
+            <input type="text" value={form.location} onChange={e=>onChange('location',e.target.value)}
+              placeholder="例：山形県村山市" className={`${inputCls} flex-1`} />
+            <button type="button" onClick={searchByLocation} disabled={locationSearching||!form.location.trim()}
+              title="場所から店舗名を検索"
+              className="px-3 py-2 bg-green-50 text-green-600 rounded-lg text-sm hover:bg-green-100 disabled:opacity-40 transition-colors whitespace-nowrap">
+              {locationSearching ? '⏳' : '🏪→'}
+            </button>
+          </div>
+          {locationMsg && <p className="text-xs mt-1 text-gray-500">{locationMsg}</p>}
+        </div>
+        <div><label className={labelCls}>🍶 商品種類</label>
+          <select value={form.product} onChange={e=>onChange('product',e.target.value)} className={inputCls}>
+            <option>低温貯蔵酒</option><option>生貯蔵酒</option><option>生酒</option>
+          </select></div>
+        <div><label className={labelCls}>📦 容量</label>
+          <select value={form.volume} onChange={e=>onChange('volume',e.target.value)} className={inputCls}>
+            <option value="1800ml">1800ml（一升瓶）</option><option value="720ml">720ml（四合瓶）</option>
+          </select></div>
+        <div><label className={labelCls}>💰 価格（円）</label>
+          <input type="number" value={form.price} onChange={e=>onChange('price',e.target.value)} placeholder="例：2750" min="0" className={inputCls} /></div>
+        <div><label className={labelCls}>📝 メモ</label>
+          <textarea value={form.memo} onChange={e=>onChange('memo',e.target.value)} placeholder="例：棚に2本残っていた" rows={3} className={`${inputCls} resize-none`} /></div>
+      </div>
+    );
+  };
+
+  const emptyForm = () => ({ date:today(), store:'', location:'', product:'低温貯蔵酒', volume:'1800ml', price:'', memo:'' });
+  const formToRecord = (form, extra) => ({
+    id: generateId('rec'),
+    date: form.date, store: form.store.trim(), location: form.location.trim(),
+    product: form.product, volume: form.volume,
+    price: form.price ? parseInt(form.price) : null,
+    memo: form.memo.trim(), timestamp: new Date().toISOString(),
+    latitude: null, longitude: null, ...extra,
+  });
+
+  const StatusMsg = ({ type, children }) => {
+    const cls = type==='error' ? 'bg-red-50 border-red-200 text-red-700'
+              : type==='success' ? 'bg-green-50 border-green-200 text-green-700'
+              : 'bg-indigo-50 border-indigo-200 text-indigo-700';
+    return <div className={`border rounded-lg p-3 text-sm anim-slide-down ${cls}`}>{children}</div>;
+  };
+
+  const APIKeyWarning = () => (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 text-center">
+      <p className="text-amber-800 font-medium mb-1">⚙️ Claude APIキーが必要です</p>
+      <p className="text-amber-600 text-sm">「設定」タブでAPIキーを入力してください</p>
+    </div>
+  );
+
+  // ============================================================
+  // Firebase設定モーダル
+  // ============================================================
+  const FirebaseSetupModal = ({ onComplete }) => {
+    const [config, setConfig] = useState({
+      apiKey:'', authDomain:'', databaseURL:'', projectId:'',
+      storageBucket:'', messagingSenderId:'', appId:'',
+    });
+    const [connecting, setConnecting] = useState(false);
+    const [error, setError] = useState('');
+
+    const FIELDS = [
+      { key:'apiKey',            label:'API Key',            ph:'AIza...' },
+      { key:'authDomain',        label:'Auth Domain',        ph:'xxx.firebaseapp.com' },
+      { key:'databaseURL',       label:'Database URL',       ph:'https://xxx-default-rtdb.firebaseio.com' },
+      { key:'projectId',         label:'Project ID',         ph:'xxx' },
+      { key:'storageBucket',     label:'Storage Bucket',     ph:'xxx.appspot.com' },
+      { key:'messagingSenderId', label:'Messaging Sender ID',ph:'123...' },
+      { key:'appId',             label:'App ID',             ph:'1:123:web:abc' },
+    ];
+
+    const connect = async () => {
+      for (const k of ['apiKey','authDomain','databaseURL','projectId']) {
+        if (!config[k].trim()) return setError(`${k} を入力してください`);
+      }
+      setConnecting(true); setError('');
+      try {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(Object.fromEntries(
+            Object.entries(config).map(([k,v]) => [k, v.trim()])
+          ));
+        }
+        await firebase.auth().signInAnonymously();
+        localStorage.setItem(LS.FB_CONFIG, JSON.stringify(config));
+        onComplete();
+      } catch (e) {
+        setError('接続エラー: ' + e.message);
+        if (firebase.apps.length) { try { firebase.app().delete(); } catch {} }
+      } finally { setConnecting(false); }
+    };
+
+    return (
+      <div className="fixed inset-0 bg-indigo-900/95 flex items-start justify-center z-50 p-4 overflow-y-auto">
+        <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl my-6 anim-pop-in">
+          <div className="text-center mb-5">
+            <div className="text-4xl mb-2">🔧</div>
+            <h2 className="text-xl font-bold text-gray-800">Firebase設定</h2>
+            <p className="text-gray-500 text-sm mt-1">友達とリアルタイムで情報共有するために必要です</p>
+          </div>
+          <div className="bg-indigo-50 rounded-xl p-3 mb-4 text-xs text-indigo-800 space-y-1">
+            <p className="font-semibold">📋 初回設定手順</p>
+            <p>1. <a href="https://console.firebase.google.com/" target="_blank" className="underline font-medium">console.firebase.google.com</a> でプロジェクト作成</p>
+            <p>2. Realtime Database を有効化（テストモード）</p>
+            <p>3. Authentication → 匿名ログイン を有効化</p>
+            <p>4. ⚙️プロジェクト設定 → マイアプリ → ウェブ → 設定をコピー</p>
+          </div>
+          <div className="space-y-2">
+            {FIELDS.map(({key, label, ph}) => (
+              <div key={key}>
+                <label className="block text-xs font-medium text-gray-600 mb-0.5">{label}</label>
+                <input type="text" value={config[key]}
+                  onChange={e => setConfig(p => ({...p, [key]:e.target.value}))}
+                  placeholder={ph}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+            ))}
+          </div>
+          {error && <p className="text-red-600 text-sm mt-3 p-2 bg-red-50 rounded-lg">{error}</p>}
+          <button onClick={connect} disabled={connecting}
+            className="w-full mt-4 bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50">
+            {connecting ? '🔄 接続中...' : '🔌 接続して開始'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // ユーザー/グループセットアップモーダル
+  // ============================================================
+  const UserSetupModal = ({ onComplete }) => {
+    const [step,     setStep]     = useState('name');
+    const [nickname, setNickname] = useState('');
+    const [joinId,   setJoinId]   = useState(localStorage.getItem(LS.PENDING_JOIN) || '');
+    const [loading,  setLoading]  = useState(false);
+    const [error,    setError]    = useState('');
+
+    const goChoice = () => {
+      const n = nickname.trim();
+      if (!n)          return setError('ニックネームを入力してください');
+      if (n.length>20) return setError('20文字以内で入力してください');
+      setError('');
+      // 招待リンクから来た場合は直接参加へ
+      if (localStorage.getItem(LS.PENDING_JOIN)) { handleJoin(n); return; }
+      setStep('choice');
+    };
+
+    const handleCreate = async () => {
+      setLoading(true); setError('');
+      try {
+        const uid = firebase.auth().currentUser.uid;
+        const gid = generateId('grp');
+        await db.createGroup(gid, uid, nickname.trim());
+        localStorage.setItem(LS.GROUP_ID,  gid);
+        localStorage.setItem(LS.NICKNAME,  nickname.trim());
+        onComplete({ userId:uid, nickname:nickname.trim(), groupId:gid });
+      } catch(e) { setError('グループ作成に失敗: '+e.message); }
+      finally { setLoading(false); }
+    };
+
+    const handleJoin = async (name) => {
+      const n   = name || nickname.trim();
+      const gid = (joinId || localStorage.getItem(LS.PENDING_JOIN) || '').trim();
+      if (!gid) return setError('グループIDを入力してください');
+      setLoading(true); setError('');
+      try {
+        const info = await db.getGroupInfo(gid);
+        if (!info) throw new Error('グループが見つかりません');
+        const uid = firebase.auth().currentUser.uid;
+        await db.addUser(gid, uid, n);
+        localStorage.setItem(LS.GROUP_ID, gid);
+        localStorage.setItem(LS.NICKNAME, n);
+        localStorage.removeItem(LS.PENDING_JOIN);
+        onComplete({ userId:uid, nickname:n, groupId:gid });
+      } catch(e) { setError('参加に失敗: '+e.message); }
+      finally { setLoading(false); }
+    };
+
+    return (
+      <div className="fixed inset-0 bg-indigo-900/95 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl p-8 max-w-sm w-full shadow-2xl anim-pop-in">
+          <div className="text-center mb-6">
+            <div className="text-5xl mb-3">🍶</div>
+            <h1 className="text-2xl font-bold text-gray-800">朝日鷹ハンター</h1>
+            <p className="text-gray-500 text-sm mt-1">〜鷹狩の記録〜</p>
+          </div>
+
+          {step === 'name' && (
+            <>
+              <label className="block text-sm font-medium text-gray-700 mb-2">ニックネーム</label>
+              <input type="text" value={nickname} autoFocus maxLength={20}
+                onChange={e => { setNickname(e.target.value); setError(''); }}
+                onKeyDown={e => e.key==='Enter' && goChoice()}
+                placeholder="例：山形の太郎"
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-2" />
+              {error && <p className="text-red-500 text-sm mb-2">{error}</p>}
+              <button onClick={goChoice}
+                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors">
+                次へ →
+              </button>
+            </>
+          )}
+
+          {step === 'choice' && (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-500 text-center mb-4">こんにちは、{nickname}さん！</p>
+              <button onClick={handleCreate} disabled={loading}
+                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50">
+                {loading ? '🔄 作成中...' : '🆕 新しいグループを作成'}
+              </button>
+              <button onClick={() => setStep('join')}
+                className="w-full bg-white text-indigo-600 py-3 rounded-xl font-semibold border border-indigo-300 hover:bg-indigo-50 transition-colors">
+                👥 既存グループに参加
+              </button>
+              {error && <p className="text-red-500 text-sm">{error}</p>}
+            </div>
+          )}
+
+          {step === 'join' && (
+            <>
+              <p className="text-sm text-gray-600 mb-3">グループIDを入力してください</p>
+              <input type="text" value={joinId} autoFocus
+                onChange={e => { setJoinId(e.target.value); setError(''); }}
+                placeholder="grp_..."
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-2" />
+              {error && <p className="text-red-500 text-sm mb-2">{error}</p>}
+              <button onClick={() => handleJoin()} disabled={loading}
+                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50 mb-2">
+                {loading ? '🔄 参加中...' : '👥 グループに参加'}
+              </button>
+              <button onClick={() => setStep('choice')} className="w-full text-gray-500 text-sm hover:underline">← 戻る</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // EXIF読み取り
+  // ============================================================
+  const readExif = async (file) => {
+    try {
+      if (!window.exifr) return {};
+      const exif = await exifr.parse(file, { tiff:true, gps:true, ifd0:true });
+      if (!exif) return {};
+      const result = {};
+      const dt = exif.DateTimeOriginal || exif.DateTime || exif.CreateDate;
+      if (dt instanceof Date && !isNaN(dt)) result.date = dt.toISOString().split('T')[0];
+      if (exif.latitude!=null && exif.longitude!=null) {
+        result.latitude=exif.latitude; result.longitude=exif.longitude;
+      }
+      return result;
+    } catch { return {}; }
+  };
+
+  // ============================================================
+  // 記録タブ — 手動入力
+  // ============================================================
+  const ManualInputForm = ({ currentUser, onSave }) => {
+    const [form,   setForm]   = useState(emptyForm());
+    const [saving, setSaving] = useState(false);
+    const [saved,  setSaved]  = useState(false);
+    const [error,  setError]  = useState('');
+
+    const handleChange = (f, v) => { setForm(p=>({...p,[f]:v})); setSaved(false); setError(''); };
+
+    const handleSubmit = async (e) => {
+      e.preventDefault();
+      if (!form.store.trim()) return setError('店舗名を入力してください');
+      setSaving(true); setError('');
+      try {
+        const record = formToRecord(form, { photo:null, userId:currentUser.id, source:'manual' });
+        await onSave(record);
+        setSaved(true); setForm(emptyForm());
+        setTimeout(() => setSaved(false), 3000);
+      } catch(err) {
+        setError('保存に失敗しました: ' + err.message);
+      } finally { setSaving(false); }
+    };
+
+    return (
+      <form onSubmit={handleSubmit} className="bg-white p-5 rounded-xl shadow-sm space-y-4">
+        <RecordFormFields form={form} onChange={handleChange} />
+        {error && <StatusMsg type="error">⚠️ {error}</StatusMsg>}
+        {saved && <StatusMsg type="success">✅ 保存しました！みんなに共有されました 🎉</StatusMsg>}
+        <button type="submit" disabled={saving}
+          className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50">
+          {saving ? '🔄 保存中...' : '💾 保存する'}
+        </button>
+      </form>
+    );
+  };
+
+  // ============================================================
+  // 記録タブ — 写真入力
+  // ============================================================
+  const PhotoUploadForm = ({ currentUser, onSave, apiKey }) => {
+    const [preview,   setPreview]   = useState(null);
+    const [exifInfo,  setExifInfo]  = useState(null);
+    const [analyzing, setAnalyzing] = useState(false);
+    const [saving,    setSaving]    = useState(false);
+    const [form,      setForm]      = useState(null);
+    const [error,     setError]     = useState('');
+    const [saved,     setSaved]     = useState(false);
+    const [mode, setMode] = useState(apiKey ? 'ai' : 'exif');
+
+    const handleFile = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      setError(''); setForm(null); setSaved(false); setExifInfo(null);
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const dataUrl = ev.target.result;
+        setPreview(dataUrl);
+        const exif = await readExif(file);
+        setExifInfo(exif);
+        if (mode==='ai' && apiKey) {
+          setAnalyzing(true);
+          try {
+            const compressed = await compressImage(dataUrl);
+            const text = await callClaudeAPI(apiKey, [{
+              role:'user',
+              content:[
+                {type:'image', source:{type:'base64', media_type:'image/jpeg', data:compressed.split(',')[1]}},
+                {type:'text', text:EXTRACT_PROMPT},
+              ],
+            }]);
+            const result = extractJSON(text);
+            setForm({
+              date:     result?.date     || exif.date || today(),
+              store:    result?.store    || '',
+              location: result?.location || '',
+              product:  ['低温貯蔵酒','生貯蔵酒','生酒'].includes(result?.product) ? result.product : '低温貯蔵酒',
+              volume:   ['1800ml','720ml'].includes(result?.volume) ? result.volume : '1800ml',
+              price:    result?.price    ? String(result.price) : '',
+              memo:     result?.memo     || '',
+            });
+            if (!result) setError('AIで情報を抽出できませんでした。手動で入力してください。');
+          } catch(err) {
+            setError('AI解析エラー: ' + err.message);
+            setForm({ ...emptyForm(), date:exif.date||today() });
+          } finally { setAnalyzing(false); }
+        } else {
+          setForm({ ...emptyForm(), date:exif.date||today() });
+        }
+      };
+      reader.readAsDataURL(file);
+    };
+
+    const handleSave = async () => {
+      if (!form?.store?.trim()) return setError('店舗名を入力してください');
+      setSaving(true); setError('');
+      try {
+        const compressed = preview ? await compressImage(preview, 500) : null;
+        const record = formToRecord(form, {
+          photo: compressed, userId:currentUser.id, source:'photo',
+          latitude:  exifInfo?.latitude  ?? null,
+          longitude: exifInfo?.longitude ?? null,
+        });
+        await onSave(record);
+        setSaved(true); setPreview(null); setForm(null); setExifInfo(null);
+        setTimeout(() => setSaved(false), 3000);
+      } catch(err) {
+        setError('保存に失敗しました: ' + err.message);
+      } finally { setSaving(false); }
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-white p-4 rounded-xl shadow-sm">
+          <p className="text-xs font-medium text-gray-500 mb-2">解析モード</p>
+          <div className="flex gap-2">
+            <button onClick={() => setMode('exif')}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${mode==='exif'?'bg-emerald-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              📷 EXIF（無料）
+            </button>
+            <button onClick={() => setMode('ai')}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${mode==='ai'?'bg-indigo-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              🤖 Claude AI
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mt-2">
+            {mode==='exif' ? '📷 撮影日時・GPS座標を自動入力。店舗名などは手動で。'
+              : apiKey ? '🤖 写真から店舗名・価格などを自動抽出します。'
+              : '⚠️ APIキーが未設定です。設定タブで入力してください。'}
+          </p>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <label className="block text-sm font-medium text-gray-700 mb-3">📸 写真をアップロード</label>
+          <input type="file" accept="image/*" onChange={handleFile}
+            className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+        </div>
+        {preview && (
+          <div className="bg-white p-3 rounded-xl shadow-sm">
+            <img src={preview} alt="プレビュー" className="w-full max-h-48 object-contain rounded-lg" />
+            {exifInfo && (exifInfo.date||exifInfo.latitude) && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {exifInfo.date && <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📅 {formatDate(exifInfo.date)}</span>}
+                {exifInfo.latitude && <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">📍 GPS取得済み</span>}
+              </div>
+            )}
+          </div>
+        )}
+        {analyzing && <StatusMsg type="info">🤖 Claude AIが解析中...</StatusMsg>}
+        {error     && <StatusMsg type="error">⚠️ {error}</StatusMsg>}
+        {saved     && <StatusMsg type="success">✅ 保存しました！みんなに共有されました 🎉</StatusMsg>}
+        {form && (
+          <div className="bg-white p-5 rounded-xl shadow-sm space-y-4">
+            <p className="text-sm font-medium text-gray-600">
+              {mode==='ai' ? '✨ AIが抽出しました。確認・修正してください。' : '📝 写真を見ながら入力してください。'}
+            </p>
+            <RecordFormFields form={form} onChange={(f,v) => setForm(p=>({...p,[f]:v}))} />
+            <button onClick={handleSave} disabled={saving}
+              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50">
+              {saving ? '🔄 保存中...' : '💾 保存する'}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ============================================================
+  // 記録タブ — SNS入力
+  // ============================================================
+  const SNSInputForm = ({ currentUser, onSave, apiKey }) => {
+    const [text,      setText]      = useState('');
+    const [analyzing, setAnalyzing] = useState(false);
+    const [saving,    setSaving]    = useState(false);
+    const [form,      setForm]      = useState(null);
+    const [error,     setError]     = useState('');
+    const [saved,     setSaved]     = useState(false);
+
+    if (!apiKey) return <APIKeyWarning />;
+
+    const handleAnalyze = async () => {
+      if (!text.trim()) return setError('テキストを入力してください');
+      setError(''); setAnalyzing(true);
+      try {
+        const responseText = await callClaudeAPI(apiKey, [{
+          role:'user',
+          content:`以下のSNS/ブログ投稿から朝日鷹の情報を抽出してください。\n\nテキスト：\n${text}\n\n${EXTRACT_PROMPT}`,
+        }]);
+        const result = extractJSON(responseText);
+        if (result) {
+          setForm({
+            date:     result.date     || today(),
+            store:    result.store    || '',
+            location: result.location || '',
+            product:  ['低温貯蔵酒','生貯蔵酒','生酒'].includes(result.product) ? result.product : '低温貯蔵酒',
+            volume:   ['1800ml','720ml'].includes(result.volume) ? result.volume : '1800ml',
+            price:    result.price    ? String(result.price) : '',
+            memo:     result.memo     || '',
+          });
+        } else { setError('情報を抽出できませんでした。手動で入力してください。'); }
+      } catch(err) { setError('解析エラー: ' + err.message); }
+      finally { setAnalyzing(false); }
+    };
+
+    const handleSave = async () => {
+      if (!form?.store?.trim()) return setError('店舗名を入力してください');
+      setSaving(true); setError('');
+      try {
+        const record = formToRecord(form, { photo:null, userId:currentUser.id, source:'sns' });
+        await onSave(record);
+        setSaved(true); setText(''); setForm(null);
+        setTimeout(() => setSaved(false), 3000);
+      } catch(err) { setError('保存に失敗しました: ' + err.message); }
+      finally { setSaving(false); }
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <label className={labelCls}>📰 SNS・ブログの投稿テキストを貼り付け</label>
+          <textarea value={text} onChange={e=>setText(e.target.value)} rows={5}
+            placeholder="例：今日ヨークベニマルで朝日鷹の低温貯蔵酒1800mlをゲット！2750円でした。"
+            className={`${inputCls} resize-none mb-3`} />
+          <button onClick={handleAnalyze} disabled={analyzing}
+            className="w-full bg-indigo-100 text-indigo-700 py-2.5 rounded-lg font-medium hover:bg-indigo-200 transition-colors disabled:opacity-50">
+            {analyzing ? '🤖 解析中...' : '🤖 AIで情報を抽出'}
+          </button>
+        </div>
+        {error && <StatusMsg type="error">⚠️ {error}</StatusMsg>}
+        {saved && <StatusMsg type="success">✅ 保存しました！みんなに共有されました 🎉</StatusMsg>}
+        {form && (
+          <div className="bg-white p-5 rounded-xl shadow-sm space-y-4">
+            <p className="text-sm text-indigo-600 font-medium">✨ AIが抽出しました。内容を確認・修正してください。</p>
+            <RecordFormFields form={form} onChange={(f,v) => setForm(p=>({...p,[f]:v}))} />
+            <button onClick={handleSave} disabled={saving}
+              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-50">
+              {saving ? '🔄 保存中...' : '💾 保存する'}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ============================================================
+  // 記録タブ — 目撃情報入力
+  // ============================================================
+  const SightingInputForm = ({ currentUser, onSave }) => {
+    const emptyF = () => ({ date:today(), store:'', location:'', memo:'', url:'' });
+    const [form,   setForm]   = useState(emptyF());
+    const [saving, setSaving] = useState(false);
+    const [saved,  setSaved]  = useState(false);
+    const [error,  setError]  = useState('');
+
+    const handleSave = async () => {
+      if (!form.store.trim()) return setError('店舗名を入力してください');
+      setSaving(true); setError('');
+      try {
+        const record = {
+          id: generateId('rec'),
+          date: form.date,
+          store: form.store.trim(),
+          location: form.location.trim(),
+          product: '低温貯蔵酒',
+          volume: '1800ml',
+          price: null,
+          memo: [form.memo, form.url ? `出典: ${form.url}` : ''].filter(Boolean).join('\n'),
+          photo: null,
+          userId: currentUser.id,
+          source: 'sighting',
+          isSighting: true,
+          latitude: null,
+          longitude: null,
+          createdAt: new Date().toISOString(),
+        };
+        await onSave(record);
+        setSaved(true); setForm(emptyF());
+        setTimeout(() => setSaved(false), 3000);
+      } catch(err) { setError('保存に失敗しました: ' + err.message); }
+      finally { setSaving(false); }
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
+          <p className="font-semibold mb-1">👁️ 目撃情報とは？</p>
+          <p>ネットやSNSで見かけた「○○店に朝日鷹あった！」という情報を記録します。入荷予測に反映されます。</p>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm space-y-3">
+          <div><label className={labelCls}>📅 目撃日</label>
+            <input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} className={inputCls} /></div>
+          <div><label className={labelCls}>🏪 店舗名 <span className="text-red-500">*</span></label>
+            <input type="text" value={form.store} onChange={e=>setForm(p=>({...p,store:e.target.value}))} placeholder="例：ヨークベニマル村山店" className={inputCls} /></div>
+          <div><label className={labelCls}>📍 場所</label>
+            <input type="text" value={form.location} onChange={e=>setForm(p=>({...p,location:e.target.value}))} placeholder="例：山形県村山市" className={inputCls} /></div>
+          <div><label className={labelCls}>📝 メモ</label>
+            <textarea value={form.memo} onChange={e=>setForm(p=>({...p,memo:e.target.value}))} placeholder="例：残り2本あったとのこと" rows={2} className={`${inputCls} resize-none`} /></div>
+          <div><label className={labelCls}>🔗 情報元URL（任意）</label>
+            <input type="url" value={form.url} onChange={e=>setForm(p=>({...p,url:e.target.value}))} placeholder="https://..." className={inputCls} /></div>
+          {error && <StatusMsg type="error">⚠️ {error}</StatusMsg>}
+          {saved && <StatusMsg type="success">✅ 目撃情報を保存しました！予測に反映されます 🎉</StatusMsg>}
+          <button onClick={handleSave} disabled={saving}
+            className="w-full bg-amber-500 text-white py-3 rounded-xl font-semibold hover:bg-amber-600 transition-colors disabled:opacity-50">
+            {saving ? '🔄 保存中...' : '👁️ 目撃情報を記録'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // タブ: 記録
+  // ============================================================
+  const RecordTab = ({ currentUser, onSave, apiKey }) => {
+    const [sub, setSub] = useState('manual');
+    const btn = (t) => `px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+      sub===t ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+    }`;
+    return (
+      <div className="space-y-4">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setSub('photo')}    className={btn('photo')}>📸 写真</button>
+          <button onClick={() => setSub('manual')}   className={btn('manual')}>✍️ 手動</button>
+          <button onClick={() => setSub('sns')}      className={btn('sns')}>📰 SNS</button>
+          <button onClick={() => setSub('sighting')} className={btn('sighting')}>👁️ 目撃</button>
+        </div>
+        {sub==='photo'    && <PhotoUploadForm   currentUser={currentUser} onSave={onSave} apiKey={apiKey} />}
+        {sub==='manual'   && <ManualInputForm   currentUser={currentUser} onSave={onSave} />}
+        {sub==='sns'      && <SNSInputForm      currentUser={currentUser} onSave={onSave} apiKey={apiKey} />}
+        {sub==='sighting' && <SightingInputForm currentUser={currentUser} onSave={onSave} />}
+      </div>
+    );
+  };
+
+  // ============================================================
+  // タブ: 一覧
+  // ============================================================
+  const ListTab = ({ records, users, onUpdate, onDelete }) => {
+    const [filterSearch,  setFilterSearch]  = useState('');
+    const [filterStore,   setFilterStore]   = useState('');
+    const [filterProduct, setFilterProduct] = useState('');
+    const [filterVolume,  setFilterVolume]  = useState('');
+    const [filterFrom,    setFilterFrom]    = useState('');
+    const [filterTo,      setFilterTo]      = useState('');
+    const [sortKey,       setSortKey]       = useState('date_desc');
+    const [editingId,     setEditingId]     = useState(null);
+    const [editForm,      setEditForm]      = useState(null);
+
+    const stores = useMemo(() => [...new Set(records.map(r=>r.store))].sort(), [records]);
+    const getUserName = (id) => users.find(u=>u.id===id)?.nickname || '不明';
+    const srcIcon = { photo:'📸', manual:'✍️', sns:'📰' };
+
+    const filtered = useMemo(() => {
+      const q = filterSearch.trim().toLowerCase();
+      let list = records.filter(r => {
+        if (q && !([r.store,r.location,r.memo,r.product].join(' ').toLowerCase().includes(q))) return false;
+        if (filterStore   && r.store   !== filterStore)   return false;
+        if (filterProduct && r.product !== filterProduct) return false;
+        if (filterVolume  && r.volume  !== filterVolume)  return false;
+        if (filterFrom    && r.date    <  filterFrom)     return false;
+        if (filterTo      && r.date    >  filterTo)       return false;
+        return true;
+      });
+      list = [...list].sort((a,b) => {
+        if (sortKey==='date_desc')  return (b.date||'').localeCompare(a.date||'');
+        if (sortKey==='date_asc')   return (a.date||'').localeCompare(b.date||'');
+        if (sortKey==='store')      return (a.store||'').localeCompare(b.store||'', 'ja');
+        if (sortKey==='price_desc') return (b.price||0)-(a.price||0);
+        if (sortKey==='price_asc')  return (a.price||0)-(b.price||0);
+        return 0;
+      });
+      return list;
+    }, [records, filterSearch, filterStore, filterProduct, filterVolume, filterFrom, filterTo, sortKey]);
+
+    const hasFilter = filterSearch||filterStore||filterProduct||filterVolume||filterFrom||filterTo;
+    const clearFilters = () => {
+      setFilterSearch(''); setFilterStore(''); setFilterProduct('');
+      setFilterVolume(''); setFilterFrom(''); setFilterTo('');
+    };
+
+    const startEdit = (r) => {
+      setEditingId(r.id);
+      setEditForm({ date:r.date, store:r.store, location:r.location||'',
+        product:r.product, volume:r.volume, price:r.price?String(r.price):'', memo:r.memo||'' });
+    };
+
+    const commitEdit = async (id) => {
+      try {
+        await onUpdate(id, { ...editForm, price: editForm.price ? parseInt(editForm.price) : null });
+        setEditingId(null); setEditForm(null);
+      } catch(e) { alert('更新に失敗しました: '+e.message); }
+    };
+
+    const deleteRecord = async (id) => {
+      if (!confirm('この記録を削除しますか？')) return;
+      try { await onDelete(id); }
+      catch(e) { alert('削除に失敗しました: '+e.message); }
+    };
+
+    const smInput = "w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-white p-4 rounded-xl shadow-sm space-y-3">
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+            <input type="text" value={filterSearch} onChange={e=>setFilterSearch(e.target.value)}
+              placeholder="店舗名・場所・メモで検索..."
+              className="w-full border border-gray-300 rounded-lg pl-8 pr-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            {filterSearch && <button onClick={() => setFilterSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm">✕</button>}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 shrink-0">並び替え</span>
+            <select value={sortKey} onChange={e=>setSortKey(e.target.value)}
+              className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-50">
+              <option value="date_desc">日付（新しい順）</option>
+              <option value="date_asc">日付（古い順）</option>
+              <option value="store">店舗名</option>
+              <option value="price_desc">価格（高い順）</option>
+              <option value="price_asc">価格（安い順）</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><p className="text-xs text-gray-500 mb-1">店舗名</p>
+              <select value={filterStore} onChange={e=>setFilterStore(e.target.value)} className={smInput}>
+                <option value="">すべて</option>
+                {stores.map(s=><option key={s} value={s}>{s}</option>)}
+              </select></div>
+            <div><p className="text-xs text-gray-500 mb-1">商品種類</p>
+              <select value={filterProduct} onChange={e=>setFilterProduct(e.target.value)} className={smInput}>
+                <option value="">すべて</option>
+                <option value="低温貯蔵酒">低温貯蔵酒</option>
+                <option value="生貯蔵酒">生貯蔵酒</option>
+                <option value="生酒">生酒</option>
+              </select></div>
+            <div><p className="text-xs text-gray-500 mb-1">容量</p>
+              <select value={filterVolume} onChange={e=>setFilterVolume(e.target.value)} className={smInput}>
+                <option value="">すべて</option>
+                <option value="1800ml">1800ml</option>
+                <option value="720ml">720ml</option>
+              </select></div>
+            <div></div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><p className="text-xs text-gray-500 mb-1">開始日</p>
+              <input type="date" value={filterFrom} onChange={e=>setFilterFrom(e.target.value)} className={smInput} /></div>
+            <div><p className="text-xs text-gray-500 mb-1">終了日</p>
+              <input type="date" value={filterTo} onChange={e=>setFilterTo(e.target.value)} className={smInput} /></div>
+          </div>
+          {hasFilter && <button onClick={clearFilters} className="text-sm text-indigo-600 hover:underline">✕ フィルターをすべてクリア</button>}
+        </div>
+
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-gray-500">{filtered.length} 件 / 全 {records.length} 件</p>
+          {hasFilter && <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">フィルター適用中</span>}
+        </div>
+
+        {filtered.length === 0 ? (
+          <div className="bg-white rounded-xl shadow-sm p-10 text-center text-gray-400">
+            <div className="text-4xl mb-2">🍶</div>
+            <p>記録がありません</p>
+            <p className="text-xs mt-1">「記録」タブから追加してください</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filtered.map((rec, idx) => (
+              <div key={rec.id} className="bg-white rounded-xl shadow-sm overflow-hidden card-hover anim-fade-in-up"
+                style={{animationDelay:`${Math.min(idx*0.04,0.3)}s`}}>
+                {editingId===rec.id ? (
+                  <div className="p-4 space-y-2">
+                    {[{type:'date',field:'date',ph:''},{type:'text',field:'store',ph:'店舗名'},{type:'text',field:'location',ph:'場所'}]
+                      .map(({type,field,ph}) => (
+                        <input key={field} type={type} value={editForm[field]} placeholder={ph}
+                          onChange={e=>setEditForm(p=>({...p,[field]:e.target.value}))} className={smInput} />
+                      ))}
+                    <select value={editForm.product} onChange={e=>setEditForm(p=>({...p,product:e.target.value}))} className={smInput}>
+                      <option>低温貯蔵酒</option><option>生貯蔵酒</option><option>生酒</option>
+                    </select>
+                    <select value={editForm.volume} onChange={e=>setEditForm(p=>({...p,volume:e.target.value}))} className={smInput}>
+                      <option value="1800ml">1800ml</option><option value="720ml">720ml</option>
+                    </select>
+                    <input type="number" value={editForm.price} placeholder="価格"
+                      onChange={e=>setEditForm(p=>({...p,price:e.target.value}))} className={smInput} />
+                    <textarea value={editForm.memo} placeholder="メモ" rows={2}
+                      onChange={e=>setEditForm(p=>({...p,memo:e.target.value}))} className={`${smInput} resize-none`} />
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => commitEdit(rec.id)} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium">保存</button>
+                      <button onClick={() => {setEditingId(null);setEditForm(null);}} className="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg text-sm">キャンセル</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex gap-1 flex-wrap">
+                        {rec.isSighting
+                          ? <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">👁️ 目撃情報</span>
+                          : <>
+                              <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">{rec.product}</span>
+                              <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{rec.volume}</span>
+                            </>
+                        }
+                      </div>
+                      <span className="text-xs text-gray-400">{srcIcon[rec.source]||''}</span>
+                    </div>
+                    <p className="font-semibold text-gray-800">{rec.store}</p>
+                    {rec.location && <p className="text-xs text-gray-500 mt-0.5">📍 {rec.location}</p>}
+                    <p className="text-sm text-gray-600 mt-1">📅 {formatDate(rec.date)}</p>
+                    {rec.price  && <p className="text-sm text-gray-600">💰 {rec.price.toLocaleString()}円</p>}
+                    <p className="text-xs text-gray-400 mt-1">👤 {getUserName(rec.userId)}</p>
+                    {rec.memo   && <p className="text-sm text-gray-600 mt-1">📝 {rec.memo}</p>}
+                    {rec.photo  && <img src={rec.photo} alt="写真" className="mt-2 w-full max-h-32 object-cover rounded-lg" />}
+                    <div className="flex gap-2 mt-3">
+                      <button onClick={() => startEdit(rec)} className="flex-1 bg-gray-100 text-gray-700 py-1.5 rounded-lg text-sm hover:bg-gray-200 transition-colors">✏️ 編集</button>
+                      <button onClick={() => deleteRecord(rec.id)} className="flex-1 bg-red-50 text-red-600 py-1.5 rounded-lg text-sm hover:bg-red-100 transition-colors">🗑️ 削除</button>
+                    </div>
+                    <a href={rec.latitude && rec.longitude
+                        ? `https://www.google.com/maps?q=${rec.latitude},${rec.longitude}`
+                        : `https://www.google.com/maps/search/${encodeURIComponent([rec.store, rec.location, '日本'].filter(Boolean).join(' '))}`}
+                      target="_blank" rel="noreferrer"
+                      className="mt-2 flex items-center justify-center gap-1 w-full py-1.5 rounded-lg text-sm bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors">
+                      🗺️ Google マップで開く
+                    </a>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ============================================================
+  // タブ: カレンダー
+  // ============================================================
+  const CalendarTab = ({ records }) => {
+    const purchases = useMemo(() => records.filter(r => !r.isSighting), [records]);
+    const now = new Date();
+    const [ym, setYm] = useState({ y:now.getFullYear(), m:now.getMonth() });
+    const [selected, setSelected] = useState(null);
+    const { y, m } = ym;
+    const firstWeekday = new Date(y, m, 1).getDay();
+    const daysInMonth  = new Date(y, m+1, 0).getDate();
+    const monthStr = `${y}-${String(m+1).padStart(2,'0')}`;
+    const todayStr = today();
+    const byDate = useMemo(() => {
+      const map={};
+      purchases.forEach(r => { (map[r.date]=map[r.date]||[]).push(r); });
+      return map;
+    }, [purchases]);
+    const monthRecs = purchases.filter(r=>r.date.startsWith(monthStr));
+    const early=monthRecs.filter(r=>+r.date.split('-')[2]<=10).length;
+    const mid=monthRecs.filter(r=>{const d=+r.date.split('-')[2];return d>=11&&d<=20;}).length;
+    const late=monthRecs.filter(r=>+r.date.split('-')[2]>=21).length;
+    const prev=()=>{const d=new Date(y,m-1);setYm({y:d.getFullYear(),m:d.getMonth()});};
+    const next=()=>{const d=new Date(y,m+1);setYm({y:d.getFullYear(),m:d.getMonth()});};
+    const selRecs = selected ? (byDate[selected]||[]) : [];
+    return (
+      <div className="space-y-4">
+        <div className="bg-white p-4 rounded-xl shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <button onClick={prev} className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">◀</button>
+            <h2 className="font-bold text-gray-800">{y}年{m+1}月</h2>
+            <button onClick={next} className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">▶</button>
+          </div>
+          <div className="grid grid-cols-7 mb-1">
+            {['日','月','火','水','木','金','土'].map((d,i)=>(
+              <div key={d} className={`text-center text-xs font-medium py-1 ${i===0?'text-red-500':i===6?'text-blue-500':'text-gray-500'}`}>{d}</div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {Array.from({length:firstWeekday}).map((_,i)=><div key={`e${i}`}/>)}
+            {Array.from({length:daysInMonth}).map((_,i)=>{
+              const day=i+1;
+              const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+              const has=!!byDate[ds]; const isTod=ds===todayStr; const isSel=ds===selected;
+              return (
+                <button key={day} onClick={() => setSelected(isSel?null:ds)}
+                  className={`aspect-square rounded-lg flex flex-col items-center justify-center text-sm transition-colors relative
+                    ${isSel?'bg-indigo-600 text-white':isTod?'border-2 border-indigo-400 text-indigo-700 font-bold':has?'bg-indigo-50 hover:bg-indigo-100':'hover:bg-gray-50 text-gray-700'}`}>
+                  {day}
+                  {has&&!isSel&&<span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-indigo-500 rounded-full"/>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="bg-white p-4 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-3">📊 {m+1}月の購入傾向</p>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            {[['上旬\n(1-10日)',early],['中旬\n(11-20日)',mid],['下旬\n(21-31日)',late]].map(([label,cnt])=>(
+              <div key={label} className="bg-indigo-50 rounded-lg p-3">
+                <div className="text-2xl font-bold text-indigo-700">{cnt}</div>
+                <div className="text-xs text-gray-500 whitespace-pre-line">{label}</div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400 text-center mt-2">合計 {monthRecs.length} 件</p>
+        </div>
+        {selected && (
+          <div className="bg-white p-4 rounded-xl shadow-sm">
+            <p className="font-medium text-gray-700 mb-2">📅 {formatDate(selected)} の記録</p>
+            {selRecs.length===0
+              ? <p className="text-gray-400 text-sm">この日の記録はありません</p>
+              : selRecs.map(r=>(
+                <div key={r.id} className="border border-gray-100 rounded-lg p-3 mb-2">
+                  <p className="font-medium text-gray-800">{r.store}</p>
+                  <p className="text-sm text-gray-600">{r.product} / {r.volume}</p>
+                  {r.price&&<p className="text-sm text-gray-600">💰 {r.price.toLocaleString()}円</p>}
+                </div>
+              ))
+            }
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ============================================================
+  // タブ: 統計
+  // ============================================================
+  const StatsTab = ({ records }) => {
+    const purchases = useMemo(() => records.filter(r => !r.isSighting), [records]);
+    const monthly = useMemo(() => {
+      const m={};
+      purchases.forEach(r=>{m[r.date.slice(0,7)]=(m[r.date.slice(0,7)]||0)+1;});
+      return Object.entries(m).sort().slice(-6);
+    }, [purchases]);
+    const byStore = useMemo(() => {
+      const m={};
+      purchases.forEach(r=>{m[r.store]=(m[r.store]||0)+1;});
+      return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    }, [purchases]);
+    const byProduct = useMemo(() => {
+      const m={};
+      purchases.forEach(r=>{m[r.product]=(m[r.product]||0)+1;});
+      return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+    }, [purchases]);
+    if (purchases.length===0) return (
+      <div className="bg-white rounded-xl shadow-sm p-10 text-center text-gray-400">
+        <div className="text-4xl mb-2">📊</div><p>記録がまだありません</p>
+      </div>
+    );
+    const Bar = ({ data, colors }) => {
+      const max=Math.max(...data.map(([,c])=>c),1);
+      return (
+        <div className="space-y-2">
+          {data.map(([label,cnt],i)=>(
+            <div key={label} className="flex items-center gap-2">
+              <div className="text-xs text-gray-600 w-24 shrink-0 truncate text-right">{label}</div>
+              <div className="flex-1 bg-gray-100 rounded-full h-5 overflow-hidden">
+                <div className={`h-full rounded-full ${colors[i%colors.length]} flex items-center justify-end pr-2 anim-bar`}
+                  style={{width:`${(cnt/max)*100}%`,animationDelay:`${i*0.07}s`}}>
+                  <span className="text-white text-xs font-medium">{cnt}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    };
+    return (
+      <div className="space-y-4">
+        <div className="bg-white p-4 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-3">📅 月別購入数（直近6ヶ月）</p>
+          <Bar data={monthly} colors={['bg-indigo-500','bg-indigo-400','bg-blue-500','bg-blue-400','bg-violet-500','bg-violet-400']} />
+        </div>
+        <div className="bg-white p-4 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-3">🏪 店舗別購入数</p>
+          <Bar data={byStore} colors={['bg-emerald-500','bg-teal-500','bg-green-500','bg-lime-500','bg-cyan-500','bg-sky-500','bg-blue-400','bg-indigo-400']} />
+        </div>
+        <div className="bg-white p-4 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-3">🍶 商品別購入数</p>
+          <Bar data={byProduct} colors={['bg-rose-500','bg-pink-500','bg-purple-500']} />
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // 予測スコア計算
+  // ============================================================
+  const calcPredictions = (records) => {
+    const stores=[...new Set(records.map(r=>r.store))];
+    return stores.map(store=>{
+      const recs=records.filter(r=>r.store===store);
+      const early=recs.filter(r=>new Date(r.date).getDate()<=7).length;
+      const sorted=[...recs].sort((a,b)=>new Date(b.date)-new Date(a.date));
+      const latest=sorted[0];
+      const ds=daysSince(latest.date);
+      const avgInterval=recs.length>1
+        ? recs.reduce((acc,r,i,arr)=>i===0?acc:acc+(new Date(arr[i-1].date)-new Date(r.date))/86400000,0)/(recs.length-1)
+        : 30;
+      const perScore=Math.min(early/(recs.length||1)*2,1)*0.5+Math.min(recs.length/5,1)*0.5;
+      const recScore=Math.min(ds/avgInterval,1);
+      const uniq=new Set(recs.map(r=>r.userId)).size;
+      const sharedScore=Math.min(uniq/3,1.0);
+      const snsRecs=recs.filter(r=>r.source==='sns'&&daysSince(r.date)<7).length;
+      const snsScore=Math.min(snsRecs/2,1.0);
+      const sightings=recs.filter(r=>r.isSighting&&daysSince(r.date)<14);
+      const sightingScore=sightings.length>0?Math.min(1,sightings.length/2)*(1-Math.min(daysSince(sightings[0]?.date||'2000-01-01'),14)/14):0;
+      const prob=Math.round((perScore*0.35+recScore*0.25+sharedScore*0.15+snsScore*0.1+sightingScore*0.15)*100);
+      return {store, prob, lastDate:latest.date, ds};
+    }).sort((a,b)=>b.prob-a.prob);
+  };
+
+  // ============================================================
+  // タブ: 地図
+  // ============================================================
+  const MapTab = ({ records }) => {
+    const stores = useMemo(() => {
+      const m={};
+      records.forEach(r=>{ (m[r.store]=m[r.store]||[]).push(r); });
+      return Object.entries(m).map(([store,recs])=>{
+        const latest=[...recs].sort((a,b)=>new Date(b.date)-new Date(a.date))[0];
+        return {store, latest, days:daysSince(latest.date), count:recs.length};
+      }).sort((a,b)=>a.days-b.days);
+    }, [records]);
+
+    const pinStyle=d=>d<=7?'border-red-200 text-red-700':d<=30?'border-orange-200 text-orange-700':'border-green-200 text-green-700';
+    const pinIcon=d=>d<=7?'🔴':d<=30?'🟠':'🟢';
+    const mapsUrl=(store,loc)=>`https://www.google.com/maps/search/${encodeURIComponent([store,loc,'日本'].filter(Boolean).join(' '))}`;
+
+    return (
+      <div className="space-y-3">
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-700">
+          <p className="font-semibold mb-0.5">🗺️ Google マップで場所を確認</p>
+          <p>店舗名をタップするとGoogle マップが開きます。</p>
+        </div>
+        {stores.length===0
+          ? <div className="bg-white rounded-xl shadow-sm p-10 text-center text-gray-400">
+              <p className="text-4xl mb-2">📍</p><p>店舗の記録がありません</p>
+            </div>
+          : stores.map(({store,latest,days,count})=>(
+            <a key={store}
+              href={mapsUrl(store, latest.location)}
+              target="_blank" rel="noreferrer"
+              className={`block bg-white border rounded-xl p-4 card-hover ${pinStyle(days)}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <span>{pinIcon(days)}</span>
+                <span className="font-semibold flex-1 text-gray-800">{store}</span>
+                <span className="text-xs text-gray-400">{count}件</span>
+              </div>
+              {latest.location && <p className="text-xs text-gray-500">📍 {latest.location}</p>}
+              <p className="text-xs text-gray-500">最終: {formatDate(latest.date)}（{days}日前）</p>
+              <p className="text-xs text-gray-400 mt-0.5">{latest.product} {latest.volume}{latest.price?` ／ ${latest.price.toLocaleString()}円`:''}</p>
+              <div className="mt-2 flex items-center justify-center gap-1 w-full py-1.5 rounded-lg text-xs bg-blue-50 text-blue-600 border border-blue-200">
+                🗺️ Google マップで開く
+              </div>
+            </a>
+          ))
+        }
+      </div>
+    );
+  };
+
+  // ============================================================
+  // タブ: 予測
+  // ============================================================
+  // ============================================================
+  // タブ: 討伐帳（スタンプカード）
+  // ============================================================
+  const StampTab = ({ records }) => {
+    const purchases = useMemo(() => records.filter(r => !r.isSighting), [records]);
+    const total = purchases.length;
+
+    // 月別集計
+    const byMonth = useMemo(() => {
+      const m = {};
+      purchases.forEach(r => {
+        const ym = r.date.slice(0, 7);
+        m[ym] = (m[ym] || 0) + 1;
+      });
+      return Object.entries(m).sort((a, b) => b[0].localeCompare(a[0]));
+    }, [purchases]);
+
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    const thisMonthCount = byMonth.find(([ym]) => ym === thisMonth)?.[1] || 0;
+
+    // スタンプ表示用（最新50件まで）
+    const stamps = purchases.slice().sort((a,b) => a.date.localeCompare(b.date));
+    const STAMP_PER_CARD = 10;
+    const cards = [];
+    for (let i = 0; i < stamps.length; i += STAMP_PER_CARD) {
+      cards.push(stamps.slice(i, i + STAMP_PER_CARD));
+    }
+    // 最後のカードが未完成なら空きを埋める
+    if (cards.length > 0) {
+      const last = cards[cards.length - 1];
+      while (last.length < STAMP_PER_CARD) last.push(null);
+    }
+
+    const fmtYm = (ym) => { const [y,m] = ym.split('-'); return `${y}年${parseInt(m)}月`; };
+
+    return (
+      <div className="space-y-5">
+        {/* ヒーローカード */}
+        <div className="bg-gradient-to-br from-indigo-700 to-indigo-900 rounded-2xl p-6 text-white text-center shadow-lg">
+          <p className="text-indigo-300 text-sm mb-1">🍶 討伐総数</p>
+          <p className="text-7xl font-black tracking-tight mb-1">{total}</p>
+          <p className="text-indigo-300 text-sm">本</p>
+          <div className="mt-4 pt-4 border-t border-indigo-600 flex justify-center gap-8">
+            <div>
+              <p className="text-indigo-300 text-xs">今月</p>
+              <p className="text-2xl font-bold">{thisMonthCount}<span className="text-sm font-normal text-indigo-300"> 本</span></p>
+            </div>
+            <div>
+              <p className="text-indigo-300 text-xs">最高月</p>
+              <p className="text-2xl font-bold">{byMonth[0]?.[1] || 0}<span className="text-sm font-normal text-indigo-300"> 本</span></p>
+            </div>
+          </div>
+        </div>
+
+        {/* スタンプカード */}
+        {total === 0 ? (
+          <div className="bg-white rounded-xl shadow-sm p-10 text-center text-gray-400">
+            <div className="text-5xl mb-3">🍶</div>
+            <p className="font-medium">まだ記録がありません</p>
+            <p className="text-xs mt-1">購入記録を追加するとスタンプが押されます</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {[...cards].reverse().map((card, ci) => {
+              const cardNo = cards.length - ci;
+              return (
+                <div key={ci} className="bg-white rounded-2xl shadow-sm overflow-hidden">
+                  <div className="bg-indigo-50 px-4 py-2 flex items-center justify-between border-b border-indigo-100">
+                    <p className="text-xs font-bold text-indigo-700">討伐帳 No.{cardNo}</p>
+                    <p className="text-xs text-indigo-400">{card.filter(Boolean).length} / {STAMP_PER_CARD}</p>
+                  </div>
+                  <div className="grid grid-cols-5 gap-3 p-4">
+                    {card.map((rec, si) => {
+                      const idx = (cardNo - 1) * STAMP_PER_CARD + si;
+                      const delay = si * 0.06;
+                      return (
+                        <div key={si} className="flex flex-col items-center gap-1">
+                          {rec ? (
+                            <div
+                              className="stamp-appear stamp-ink w-12 h-12 rounded-full bg-indigo-600 flex items-center justify-center shadow-md"
+                              style={{ animationDelay: `${delay}s` }}
+                              title={`${rec.store} ${formatDate(rec.date)}`}
+                            >
+                              <span className="text-white text-xl select-none">🍶</span>
+                            </div>
+                          ) : (
+                            <div className="w-12 h-12 rounded-full border-2 border-dashed border-gray-200 flex items-center justify-center">
+                              <span className="text-gray-200 text-xl">🍶</span>
+                            </div>
+                          )}
+                          {rec && <p className="text-[9px] text-gray-400 text-center leading-tight">{rec.date.slice(5)}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 月別グラフ */}
+        {byMonth.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-sm p-5">
+            <p className="font-bold text-gray-800 mb-4">📅 月別討伐数</p>
+            <div className="space-y-2.5">
+              {byMonth.map(([ym, cnt]) => {
+                const max = Math.max(...byMonth.map(([,c])=>c));
+                return (
+                  <div key={ym} className="flex items-center gap-3">
+                    <p className="text-xs text-gray-500 w-16 shrink-0">{fmtYm(ym)}</p>
+                    <div className="flex-1 bg-gray-100 rounded-full h-5 overflow-hidden">
+                      <div
+                        className="h-full bg-indigo-500 rounded-full anim-bar flex items-center justify-end pr-2"
+                        style={{ width: `${(cnt / max) * 100}%`, animationDuration: '0.8s' }}>
+                        <span className="text-white text-[10px] font-bold">{cnt}</span>
+                      </div>
+                    </div>
+                    <p className="text-xs font-bold text-indigo-700 w-8 text-right">{cnt}本</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const PredictionTab = ({ records }) => {
+    const preds = useMemo(() => {
+      if (records.length===0) return [];
+      return calcPredictions(records).slice(0,3).map(p=>{
+        const recs=records.filter(r=>r.store===p.store);
+        const early=recs.filter(r=>new Date(r.date).getDate()<=7).length;
+        const uniq=new Set(recs.map(r=>r.userId)).size;
+        const snsRecs=recs.filter(r=>r.source==='sns'&&daysSince(r.date)<7).length;
+        return {...p, reasons:[
+          early>0  && `過去${early}回、月初（7日以内）に購入成功`,
+          p.ds>=7  && `前回購入から${p.ds}日経過`,
+          uniq>1   && `グループ${uniq}人が購入記録あり`,
+          snsRecs>0 && `直近7日以内にSNS目撃情報あり`,
+        ].filter(Boolean)};
+      });
+    }, [records]);
+    const medals=['🥇','🥈','🥉'];
+    const gradients=['from-yellow-50 to-amber-50 border-yellow-200','from-slate-50 to-gray-50 border-gray-200','from-orange-50 to-amber-50 border-orange-200'];
+    if (records.length===0) return (
+      <div className="bg-white rounded-xl shadow-sm p-10 text-center text-gray-400">
+        <div className="text-4xl mb-2">🔮</div><p className="font-medium">記録が足りません</p>
+        <p className="text-xs mt-1">購入記録を追加すると予測が表示されます</p>
+      </div>
+    );
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-gray-500">購入傾向から今週入荷しやすい店舗を予測します</p>
+        {preds.map((p,i)=>(
+          <div key={p.store} className={`bg-gradient-to-r ${gradients[i]} border rounded-xl p-4 card-hover anim-fade-in-up`} style={{animationDelay:`${i*0.1}s`}}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-2xl">{medals[i]}</span>
+              <span className="font-bold text-gray-800 flex-1">{p.store}</span>
+              <span className="text-2xl font-bold text-indigo-700">{p.prob}%</span>
+            </div>
+            <div className="w-full bg-white/60 rounded-full h-2 mb-2">
+              <div className="bg-indigo-500 h-2 rounded-full" style={{width:`${p.prob}%`}} />
+            </div>
+            <p className="text-xs text-gray-500 mb-1">最終購入: {formatDate(p.lastDate)}（{p.ds}日前）</p>
+            <ul className="text-xs text-gray-600 space-y-0.5">{p.reasons.map((r,j)=><li key={j}>• {r}</li>)}</ul>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // ============================================================
+  // タブ: 共有（Firebase版）
+  // ============================================================
+  const QRCodeBox = ({ url }) => {
+    const divRef = useRef(null);
+    useEffect(() => {
+      if (!divRef.current||!url) return;
+      if (typeof QRCode==='undefined') return;
+      divRef.current.innerHTML='';
+      new QRCode(divRef.current, {
+        text:url, width:220, height:220,
+        colorDark:'#000000', colorLight:'#ffffff', correctLevel:QRCode.CorrectLevel.M,
+      });
+    }, [url]);
+    return <div ref={divRef} className="rounded-lg overflow-hidden" style={{width:220,height:220}} />;
+  };
+
+  const ShareTab = ({ currentUser, users, groupId, onRemoveMember }) => {
+    const [copied, setCopied] = useState(false);
+    const savedConfig = localStorage.getItem(LS.FB_CONFIG);
+    const cfgParam = savedConfig ? '&cfg=' + btoa(unescape(encodeURIComponent(savedConfig))) : '';
+    const url = `${window.location.origin}${window.location.pathname}?join=${groupId}${cfgParam}`;
+
+    const copyUrl = async () => {
+      try { await navigator.clipboard.writeText(url); }
+      catch {
+        const el=document.createElement('textarea');
+        el.value=url; document.body.appendChild(el); el.select();
+        document.execCommand('copy'); document.body.removeChild(el);
+      }
+      setCopied(true); setTimeout(()=>setCopied(false), 2500);
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-xs text-indigo-700">
+          <p className="font-semibold mb-1">🔄 リアルタイム共有中</p>
+          <p>グループメンバー全員の記録が自動同期されます。新しい記録を追加すると全員の画面に即座に反映されます。</p>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm text-center">
+          <p className="font-medium text-gray-700 mb-4">📲 QRコードで招待</p>
+          <div className="flex justify-center mb-3">
+            <div className="p-3 bg-white rounded-2xl inline-block border border-gray-100">
+              <QRCodeBox url={url} />
+            </div>
+          </div>
+          <p className="text-xs text-gray-400">スキャンするとグループに参加できます</p>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-2">🔗 招待リンク</p>
+          <p className="text-xs font-mono bg-gray-50 p-3 rounded-lg break-all text-gray-500 mb-3">{url}</p>
+          <button onClick={copyUrl}
+            className={`w-full py-3 rounded-xl font-medium transition-colors ${copied?'bg-green-500 text-white':'bg-indigo-600 text-white hover:bg-indigo-700'}`}>
+            {copied ? '✅ コピーしました！' : '📋 リンクをコピー'}
+          </button>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-1">🆔 グループID</p>
+          <p className="text-xs font-mono bg-gray-50 p-2 rounded break-all text-gray-500">{groupId}</p>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-3">👥 メンバー（{users.length}人）</p>
+          {(() => {
+            const isAdmin = users.find(u => u.id === currentUser?.id)?.role === 'admin';
+            return (
+              <div className="space-y-2">
+                {users.map(u=>(
+                  <div key={u.id} className="flex items-center gap-3 bg-gray-50 rounded-lg p-2">
+                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm">
+                      {u.nickname.charAt(0)}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-800">{u.nickname}</p>
+                      <p className="text-xs text-gray-400">{u.role==='admin'?'👑 管理者':'メンバー'}</p>
+                    </div>
+                    {u.id===currentUser?.id
+                      ? <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full">あなた</span>
+                      : isAdmin && (
+                          <button onClick={async () => {
+                            if (!confirm(`「${u.nickname}」をグループから削除しますか？`)) return;
+                            await onRemoveMember(u.id);
+                          }}
+                            className="text-xs bg-red-50 text-red-500 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors">
+                            削除
+                          </button>
+                        )
+                    }
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // タブ: 設定（Firebase版）
+  // ============================================================
+  const SettingsTab = ({ currentUser, apiKey, onApiKeyChange, records, groupId, installPrompt, onInstall, swReady, onNicknameChange, onLeaveGroup }) => {
+    const [inputKey,   setInputKey]   = useState(apiKey);
+    const [showKey,    setShowKey]    = useState(false);
+    const [saved,      setSaved]      = useState(false);
+    const [exportDone, setExportDone] = useState('');
+    const [newNickname,  setNewNickname]  = useState(currentUser?.nickname || '');
+    const [nickSaved,    setNickSaved]    = useState(false);
+    const [notifPerm,  setNotifPerm]  = useState(
+      typeof Notification!=='undefined' ? Notification.permission : 'unsupported'
+    );
+    const [notifSent, setNotifSent] = useState(false);
+
+    const requestNotif = async () => {
+      if (typeof Notification==='undefined') return;
+      const result = await Notification.requestPermission();
+      setNotifPerm(result);
+      if (result==='granted') new Notification('🍶 朝日鷹ハンター',{body:'通知が有効になりました！'});
+    };
+
+    const checkNow = () => {
+      if (notifPerm!=='granted'||records.length===0) return;
+      const top = calcPredictions(records).find(p=>p.prob>=50);
+      if (top) {
+        new Notification('🍶 朝日鷹ハンター — 入荷チャンス！',{
+          body:`${top.store}で入荷の可能性 ${top.prob}%\n前回から${top.ds}日経過`, icon:'/icon-192.png',
+        });
+        setNotifSent(true); setTimeout(()=>setNotifSent(false),3000);
+      } else {
+        new Notification('🍶 朝日鷹ハンター',{body:'現在、入荷確率50%以上の店舗はありません。'});
+      }
+    };
+
+    const notifStatus = () => {
+      if (notifPerm==='unsupported') return {label:'非対応ブラウザ',color:'text-gray-400',canEnable:false};
+      if (notifPerm==='granted')     return {label:'有効',color:'text-green-600',canEnable:false};
+      if (notifPerm==='denied')      return {label:'ブロック済み（ブラウザ設定から変更してください）',color:'text-red-500',canEnable:false};
+      return {label:'未設定',color:'text-amber-500',canEnable:true};
+    };
+    const ns = notifStatus();
+
+    const saveKey = () => {
+      localStorage.setItem(LS.API_KEY, inputKey.trim());
+      onApiKeyChange(inputKey.trim());
+      setSaved(true); setTimeout(()=>setSaved(false),2000);
+    };
+
+    const resetAll = async () => {
+      if (!confirm('すべてのデータをリセットしますか？この操作は元に戻せません。')) return;
+      try {
+        if (groupId) await db.deleteAllRecords(groupId);
+      } catch {}
+      Object.values(LS).forEach(k => localStorage.removeItem(k));
+      window.location.reload();
+    };
+
+    const downloadFile = (content, filename, type) => {
+      const blob=new Blob([content],{type});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download=filename;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    };
+
+    const exportCSV = () => {
+      if (records.length===0){alert('エクスポートする記録がありません');return;}
+      const header=['ID','日付','店舗名','場所','商品種類','容量','価格','メモ','入力方法','記録日時'];
+      const rows=records.map(r=>[
+        r.id,r.date,r.store,r.location||'',r.product,r.volume,r.price??'',
+        `"${(r.memo||'').replace(/"/g,'""')}"`,r.source,r.timestamp,
+      ]);
+      const csv=[header,...rows].map(r=>r.join(',')).join('\n');
+      downloadFile('\uFEFF'+csv,`朝日鷹記録_${new Date().toISOString().slice(0,10)}.csv`,'text/csv;charset=utf-8');
+      setExportDone('csv'); setTimeout(()=>setExportDone(''),2500);
+    };
+
+    const exportJSON = () => {
+      if (records.length===0){alert('エクスポートする記録がありません');return;}
+      const payload={exportedAt:new Date().toISOString(),groupId,records};
+      downloadFile(JSON.stringify(payload,null,2),`朝日鷹記録_${new Date().toISOString().slice(0,10)}.json`,'application/json');
+      setExportDone('json'); setTimeout(()=>setExportDone(''),2500);
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-3">👤 ニックネーム変更</p>
+          <p className="text-xs text-gray-400 mb-2 break-all">ID：{currentUser?.id}</p>
+          <input
+            type="text" value={newNickname}
+            onChange={e => { setNewNickname(e.target.value); setNickSaved(false); }}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            placeholder="ニックネームを入力" />
+          <button
+            onClick={async () => {
+              const n = newNickname.trim();
+              if (!n) return;
+              await onNicknameChange(n);
+              setNickSaved(true); setTimeout(() => setNickSaved(false), 2000);
+            }}
+            className={`w-full py-2.5 rounded-xl font-medium transition-colors ${nickSaved ? 'bg-green-500 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}>
+            {nickSaved ? '✅ 変更しました' : '💾 ニックネームを変更'}
+          </button>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-1">🚪 グループから退出</p>
+          <p className="text-xs text-gray-400 mb-3">グループから抜けます。記録データは残ります。再参加は招待リンクから可能です。</p>
+          <button
+            onClick={async () => {
+              if (!confirm('グループから退出しますか？')) return;
+              await onLeaveGroup();
+            }}
+            className="w-full py-2.5 rounded-xl font-medium bg-orange-50 text-orange-600 hover:bg-orange-100 border border-orange-200 transition-colors">
+            🚪 グループから退出する
+          </button>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-1">🤖 Claude APIキー</p>
+          <p className="text-xs text-gray-400 mb-3">写真解析・SNS解析機能に使用します（ブラウザ内のみ保存）</p>
+          <div className="relative mb-3">
+            <input type={showKey?'text':'password'} value={inputKey}
+              onChange={e=>{setInputKey(e.target.value);setSaved(false);}}
+              placeholder="sk-ant-..."
+              className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm pr-16 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <button onClick={()=>setShowKey(!showKey)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700 px-2 py-1">
+              {showKey?'隠す':'表示'}
+            </button>
+          </div>
+          <button onClick={saveKey}
+            className={`w-full py-2.5 rounded-xl font-medium transition-colors ${saved?'bg-green-500 text-white':'bg-indigo-600 text-white hover:bg-indigo-700'}`}>
+            {saved?'✅ 保存しました':'💾 APIキーを保存'}
+          </button>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-1">📤 データエクスポート</p>
+          <p className="text-xs text-gray-400 mb-4">現在 <span className="font-medium text-gray-600">{records.length}件</span> の記録があります</p>
+          <div className="grid grid-cols-2 gap-3">
+            <button onClick={exportCSV}
+              className={`py-3 rounded-xl font-medium text-sm transition-colors border ${exportDone==='csv'?'bg-green-500 text-white border-green-500':'bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-50'}`}>
+              {exportDone==='csv'?'✅ 保存完了':'📊 CSV形式'}
+            </button>
+            <button onClick={exportJSON}
+              className={`py-3 rounded-xl font-medium text-sm transition-colors border ${exportDone==='json'?'bg-green-500 text-white border-green-500':'bg-white text-indigo-700 border-indigo-300 hover:bg-indigo-50'}`}>
+              {exportDone==='json'?'✅ 保存完了':'🗂️ JSON形式'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mt-2">CSVはExcel・Googleスプレッドシートで開けます</p>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-1">🔔 プッシュ通知</p>
+          <p className="text-xs text-gray-400 mb-3">入荷予測が高い店舗をブラウザ通知でお知らせします</p>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs text-gray-500">ステータス：</span>
+            <span className={`text-xs font-medium ${ns.color}`}>{ns.label}</span>
+          </div>
+          {ns.canEnable && (
+            <button onClick={requestNotif}
+              className="w-full py-2.5 rounded-xl font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors mb-2">
+              🔔 通知を有効にする
+            </button>
+          )}
+          {notifPerm==='granted' && (
+            <button onClick={checkNow}
+              className={`w-full py-2.5 rounded-xl font-medium transition-colors border ${notifSent?'bg-green-500 text-white border-green-500':'bg-white text-indigo-700 border-indigo-300 hover:bg-indigo-50'}`}>
+              {notifSent?'✅ 送信しました':'📨 今すぐ予測を通知する'}
+            </button>
+          )}
+          <p className="text-xs text-gray-400 mt-2">※ 通知はブラウザが開いている間のみ動作します</p>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-1">📲 ホーム画面に追加</p>
+          <p className="text-xs text-gray-400 mb-3">アプリとしてインストールするとオフラインでも使えます</p>
+          {installPrompt ? (
+            <button onClick={onInstall}
+              className="w-full py-2.5 rounded-xl font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors">
+              📲 ホーム画面に追加する
+            </button>
+          ) : (
+            <div className="text-sm text-gray-500 space-y-1">
+              <p>• <strong>Android (Chrome)</strong>: ブラウザのメニュー → 「ホーム画面に追加」</p>
+              <p>• <strong>iPhone (Safari)</strong>: 共有ボタン → 「ホーム画面に追加」</p>
+              <p className={`text-xs mt-2 ${swReady?'text-green-600':'text-gray-400'}`}>
+                {swReady?'✅ オフラインキャッシュ有効':'⏳ Service Worker 準備中...'}
+              </p>
+            </div>
+          )}
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm">
+          <p className="font-medium text-gray-700 mb-1">⚠️ データ管理</p>
+          <p className="text-xs text-gray-400 mb-3">全記録をFirebaseから削除してリセットします</p>
+          <button onClick={resetAll}
+            className="w-full py-2.5 rounded-xl font-medium bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors">
+            🗑️ すべてのデータをリセット
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  // メインアプリ（Firebase版）
+  // ============================================================
+  const App = () => {
+    const [ready,          setReady]          = useState(false);
+    const [showFbSetup,    setShowFbSetup]    = useState(false);
+    const [showUserSetup,  setShowUserSetup]  = useState(false);
+    const [fbReady,        setFbReady]        = useState(false);
+    const [currentUser,    setCurrentUser]    = useState(null);
+    const [groupId,        setGroupId]        = useState('');
+    const [apiKey,         setApiKey]         = useState('');
+    const [tab,            setTab]            = useState('record');
+    const [menuOpen,       setMenuOpen]       = useState(false);
+    const [online,         setOnline]         = useState(navigator.onLine);
+    const [installPrompt,  setInstallPrompt]  = useState(null);
+    const [swReady,        setSwReady]        = useState(false);
+
+    // Firebase リアルタイム同期
+    const { records, users, syncing } = useFirebaseSync(groupId);
+
+    // オンライン/オフライン検知
+    useEffect(() => {
+      const on=()=>setOnline(true), off=()=>setOnline(false);
+      window.addEventListener('online',on); window.addEventListener('offline',off);
+      return () => { window.removeEventListener('online',on); window.removeEventListener('offline',off); };
+    }, []);
+
+    // Service Worker & PWAインストール
+    useEffect(() => {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').then(()=>setSwReady(true)).catch(()=>{});
+      }
+      const handler=(e)=>{e.preventDefault();setInstallPrompt(e);};
+      window.addEventListener('beforeinstallprompt', handler);
+      return () => window.removeEventListener('beforeinstallprompt', handler);
+    }, []);
+
+    // Firebase初期化
+    useEffect(() => {
+      setApiKey(localStorage.getItem(LS.API_KEY)||'');
+
+      // 招待リンクのグループIDを保存
+      const urlParams=new URLSearchParams(window.location.search);
+      const joinGid=urlParams.get('join');
+      if (joinGid) localStorage.setItem(LS.PENDING_JOIN, joinGid);
+
+      // 招待リンクにFirebase設定が含まれていれば自動保存
+      const cfgParam=urlParams.get('cfg');
+      if (cfgParam && !localStorage.getItem(LS.FB_CONFIG)) {
+        try {
+          const decoded=decodeURIComponent(escape(atob(cfgParam)));
+          JSON.parse(decoded); // 正しいJSONか確認
+          localStorage.setItem(LS.FB_CONFIG, decoded);
+        } catch(e) { console.warn('cfg parse error', e); }
+      }
+
+      const BUILTIN_CONFIG = {
+        apiKey: "AIzaSyDbzGghemge_m9_OisLKBJVfS8G6b02XM",
+        authDomain: "asahitaka-hunter-ed0bb.firebaseapp.com",
+        databaseURL: "https://asahitaka-hunter-ed0bb-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "asahitaka-hunter-ed0bb",
+        storageBucket: "asahitaka-hunter-ed0bb.firebasestorage.app",
+        messagingSenderId: "615951716527",
+        appId: "1:615951716527:web:63b13947d0576c9b69045a",
+      };
+
+      const savedConfig = localStorage.getItem(LS.FB_CONFIG) || JSON.stringify(BUILTIN_CONFIG);
+
+      const initFirebase = async () => {
+        try {
+          const config=JSON.parse(savedConfig);
+          if (!firebase.apps.length) firebase.initializeApp(config);
+          await firebase.auth().signInAnonymously();
+          setFbReady(true);
+
+          const storedGid=localStorage.getItem(LS.GROUP_ID);
+          const nickname=localStorage.getItem(LS.NICKNAME);
+          const uid=firebase.auth().currentUser.uid;
+
+          if (joinGid) {
+            // 招待リンクから来た場合は参加フローへ
+            setShowUserSetup(true);
+          } else if (storedGid && nickname) {
+            // localStorageに情報あり → そのまま復元
+            setCurrentUser({id:uid, nickname});
+            setGroupId(storedGid);
+          } else {
+            // localStorageにない → Firebaseから復元を試みる
+            const session = await db.getSession(uid);
+            if (session && session.groupId && session.nickname) {
+              localStorage.setItem(LS.GROUP_ID, session.groupId);
+              localStorage.setItem(LS.NICKNAME, session.nickname);
+              setCurrentUser({id:uid, nickname:session.nickname});
+              setGroupId(session.groupId);
+            } else {
+              setShowUserSetup(true);
+            }
+          }
+        } catch(e) {
+          console.error('Firebase init error:', e);
+          localStorage.removeItem(LS.FB_CONFIG);
+          // BUILTIN_CONFIGがあるので設定モーダルは出さず再起動を促す
+          setReady(true);
+        } finally { setReady(true); }
+      };
+      initFirebase();
+    }, []);
+
+    // 起動時プッシュ通知チェック
+    useEffect(() => {
+      if (!ready||records.length===0) return;
+      if (typeof Notification==='undefined'||Notification.permission!=='granted') return;
+      const todayStr=today();
+      const lastCheck=localStorage.getItem(LS.NOTIF_CHK)||'';
+      if (lastCheck===todayStr) return;
+      localStorage.setItem(LS.NOTIF_CHK, todayStr);
+      const top=calcPredictions(records).find(p=>p.prob>=60);
+      if (top) {
+        setTimeout(() => {
+          new Notification('🍶 朝日鷹ハンター — 本日の入荷チャンス！',{
+            body:`${top.store}で入荷の可能性 ${top.prob}%\n前回から${top.ds}日経過`,
+            icon:'/icon-192.png',
+          });
+        }, 2000);
+      }
+    }, [ready, records.length]);
+
+    const onFbSetupComplete = async () => {
+      setFbReady(true);
+      setShowFbSetup(false);
+      setShowUserSetup(true);
+    };
+
+    const onUserSetupComplete = async ({ userId, nickname, groupId: gid }) => {
+      setCurrentUser({id:userId, nickname});
+      setGroupId(gid);
+      setShowUserSetup(false);
+      await db.saveSession(userId, gid, nickname);
+    };
+
+    // Firebase操作
+    const onSave = useCallback(async (record) => {
+      if (!groupId) throw new Error('グループに参加していません');
+      await db.addRecord(groupId, record);
+    }, [groupId]);
+
+    const onUpdate = useCallback(async (id, updates) => {
+      if (!groupId) return;
+      await db.updateRecord(groupId, id, updates);
+    }, [groupId]);
+
+    const onDelete = useCallback(async (id) => {
+      if (!groupId) return;
+      await db.deleteRecord(groupId, id);
+    }, [groupId]);
+
+    const onNicknameChange = useCallback(async (nickname) => {
+      if (!groupId || !currentUser) return;
+      await db.updateUserNickname(groupId, currentUser.id, nickname);
+      await db.saveSession(currentUser.id, groupId, nickname);
+      localStorage.setItem(LS.NICKNAME, nickname);
+      setCurrentUser(u => ({ ...u, nickname }));
+    }, [groupId, currentUser]);
+
+    const onRemoveMember = useCallback(async (userId) => {
+      if (!groupId) return;
+      await db.removeUser(groupId, userId);
+      await db.removeSession(userId);
+    }, [groupId]);
+
+    const onLeaveGroup = useCallback(async () => {
+      if (groupId && currentUser) {
+        try {
+          await db.removeUser(groupId, currentUser.id);
+          await db.removeSession(currentUser.id);
+        } catch {}
+      }
+      localStorage.removeItem(LS.GROUP_ID);
+      localStorage.removeItem(LS.NICKNAME);
+      localStorage.removeItem(LS.PENDING_JOIN);
+      window.location.reload();
+    }, [groupId, currentUser]);
+
+    if (!ready) return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center text-gray-400">
+          <div className="text-5xl mb-2 anim-pulse">🍶</div>
+          <p>接続中...</p>
+        </div>
+      </div>
+    );
+
+    // Firebase接続失敗時（ready=trueだがfbReady=false、かつモーダルなし）
+    if (ready && !fbReady && !showFbSetup && !showUserSetup) return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-lg p-8 max-w-sm w-full text-center space-y-4">
+          <div className="text-5xl">🍶</div>
+          <p className="font-bold text-gray-800">接続できませんでした</p>
+          <p className="text-sm text-gray-500">ネットワーク接続を確認してから再試行してください。</p>
+          <button onClick={() => window.location.reload()}
+            className="w-full py-3 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors">
+            🔄 再試行
+          </button>
+        </div>
+      </div>
+    );
+
+    const TABS = [
+      {id:'record',     label:'記録',   icon:'📝'},
+      {id:'list',       label:'一覧',   icon:'📋'},
+      {id:'calendar',   label:'暦',     icon:'📅'},
+      {id:'stamp',      label:'討伐',   icon:'🎖️'},
+      {id:'stats',      label:'統計',   icon:'📊'},
+      {id:'map',        label:'地図',   icon:'🗺️'},
+      {id:'prediction', label:'予測',   icon:'🔮'},
+      {id:'share',      label:'共有',   icon:'👥'},
+      {id:'settings',   label:'設定',   icon:'⚙️'},
+    ];
+
+    return (
+      <div className="min-h-screen bg-gray-100">
+        {showFbSetup   && <FirebaseSetupModal onComplete={onFbSetupComplete} />}
+        {showUserSetup && fbReady && <UserSetupModal onComplete={onUserSetupComplete} />}
+
+        {/* ヘッダー */}
+        <header className="bg-indigo-700 text-white px-4 py-3 sticky top-0 z-40 shadow-md">
+          <div className="max-w-lg mx-auto flex items-center justify-between">
+            <div>
+              <h1 className="text-lg font-bold leading-tight">🍶 朝日鷹ハンター〜鷹狩の記録〜</h1>
+              <p className="text-indigo-200 text-xs">{currentUser?.nickname||''}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-indigo-200 text-xs">{records.length} 件の記録</p>
+              <div className="flex items-center justify-end gap-1 mt-0.5">
+                <div className={`w-1.5 h-1.5 rounded-full ${online?'bg-green-400':'bg-red-400'}`} />
+                <span className="text-xs text-indigo-200">{online?'オンライン':'オフライン'}</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* 同期中インジケーター */}
+        {syncing && (
+          <div className="bg-indigo-50 border-b border-indigo-100 text-center py-1">
+            <span className="text-xs text-indigo-500">🔄 同期中...</span>
+          </div>
+        )}
+
+        {/* タブナビ */}
+        {(() => {
+          const MAIN_TABS = TABS.slice(0, 5);
+          const EXTRA_TABS = TABS.slice(5);
+          const activeExtra = EXTRA_TABS.find(t => t.id === tab);
+          return (
+            <nav className="bg-white shadow-sm sticky top-[60px] z-30">
+              <div className="max-w-lg mx-auto">
+                <div className="flex border-b border-gray-100">
+                  {MAIN_TABS.map(t => (
+                    <button key={t.id} onClick={() => { setTab(t.id); setMenuOpen(false); }}
+                      className={`flex-1 px-1 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap text-center
+                        ${tab===t.id?'border-indigo-600 text-indigo-600':'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                      <div>{t.icon}</div><div>{t.label}</div>
+                    </button>
+                  ))}
+                  <button onClick={() => setMenuOpen(o => !o)}
+                    className={`flex-1 px-1 py-2 text-xs font-medium border-b-2 transition-colors text-center
+                      ${activeExtra||menuOpen?'border-indigo-600 text-indigo-600':'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                    <div>{activeExtra ? activeExtra.icon : '•••'}</div>
+                    <div>{activeExtra ? activeExtra.label : 'もっと'}</div>
+                  </button>
+                </div>
+              </div>
+              {menuOpen && (
+                <div className="max-w-lg mx-auto bg-white border-t border-gray-100 shadow-lg">
+                  <div className="grid grid-cols-4 gap-0 p-2">
+                    {EXTRA_TABS.map(t => (
+                      <button key={t.id} onClick={() => { setTab(t.id); setMenuOpen(false); }}
+                        className={`flex flex-col items-center gap-1 px-2 py-3 rounded-xl text-xs font-medium transition-colors
+                          ${tab===t.id?'bg-indigo-50 text-indigo-600':'text-gray-600 hover:bg-gray-50'}`}>
+                        <span className="text-xl">{t.icon}</span>
+                        <span>{t.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </nav>
+          );
+        })()}
+
+        {/* コンテンツ */}
+        <main className="max-w-lg mx-auto p-4 pb-12 tab-content" key={tab}>
+          {tab==='record'     && currentUser && <RecordTab currentUser={currentUser} onSave={onSave} apiKey={apiKey} />}
+          {tab==='list'       && <ListTab records={records} users={users} onUpdate={onUpdate} onDelete={onDelete} />}
+          {tab==='calendar'   && <CalendarTab records={records} />}
+          {tab==='stamp'      && <StampTab records={records} />}
+          {tab==='stats'      && <StatsTab records={records} />}
+          {tab==='map'        && <MapTab records={records} />}
+          {tab==='prediction' && <PredictionTab records={records} />}
+          {tab==='share'      && currentUser && <ShareTab currentUser={currentUser} users={users} groupId={groupId} onRemoveMember={onRemoveMember} />}
+          {tab==='settings'   && currentUser && (
+            <SettingsTab
+              currentUser={currentUser} apiKey={apiKey} records={records} groupId={groupId}
+              onApiKeyChange={(k)=>{setApiKey(k);localStorage.setItem(LS.API_KEY,k);}}
+              installPrompt={installPrompt}
+              onInstall={()=>{ if(installPrompt){installPrompt.prompt();installPrompt.userChoice.then(()=>setInstallPrompt(null));} }}
+              onNicknameChange={onNicknameChange}
+              onLeaveGroup={onLeaveGroup}
+              swReady={swReady}
+            />
+          )}
+        </main>
+      </div>
+    );
+  };
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
